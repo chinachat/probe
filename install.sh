@@ -1,4 +1,3 @@
-cat << 'EOF' > install.sh
 #!/bin/bash
 
 # 确保以 root 权限运行
@@ -8,23 +7,37 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=========================================="
-echo "    欢迎使用轻量级多主机云探针一键安装脚本"
+echo "    欢迎使用安全增强版云探针一键安装脚本"
 echo "=========================================="
-echo "1. 安装【主控端 Server】(接收数据并展示 Web 面板)"
-echo "2. 安装【被控端 Client】(采集本节点数据并上报)"
+echo "1. 安装【主控端 Server】(HTTPS 加密 + Token 校验)"
+echo "2. 安装【被控端 Client】(HTTPS 上报 + Token 头部)"
 read -p "请选择安装类型 (1 或 2): " CHOICE
 
 if [ "$CHOICE" == "1" ]; then
+    read -p "请设置客户端上报的通讯 Token (留空则默认: MySecretToken123): " PROBE_TOKEN
+    PROBE_TOKEN=${PROBE_TOKEN:-MySecretToken123}
+
     echo "正在配置【主控端 Server】..."
     
-    # 彻底隔离：直接将主控端源码以纯净 Base64 形式写入并解码，规避任何 Bash 字符冲突
-    cat << 'SERVER_BASE64' | base64 -d > /usr/local/bin/probe_server.py
+    # 创建证书存放目录并生成自签名证书（有效期 10 年）
+    mkdir -p /usr/local/bin/probe_certs
+    openssl req -new -x509 -days 3650 -nodes \
+      -out /usr/local/bin/probe_certs/server.crt \
+      -keyout /usr/local/bin/probe_certs/server.key \
+      -subj "/C=CN/ST=GD/L=SZ/O=Probe/OU=Cluster/CN=localhost" 2>/dev/null
+
+    # 写入主控端源码
+    cat << 'SERVER_CODE_EOF' > /usr/local/bin/probe_server.py
 #!/usr/bin/env python3
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
+import ssl
 
 CONFIG_FILE = "/usr/local/bin/hosts_config.json"
+# 从环境变量或直接定义获取 Token
+AUTH_TOKEN = os.environ.get("PROBE_TOKEN", "MySecretToken123")
+
 hosts_data = {}      
 hosts_config = {}    
 
@@ -72,7 +85,7 @@ HTML_PANEL = r"""<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>🖥️ 节点云探针集群大屏</h1>
+        <h1>🔒 节点云探针集群大屏 (安全加密版)</h1>
         <div style="font-size: 13px; color: #94a3b8;">💡 提示：点击卡片上的<b>节点名称</b>即可直接重命名。</div>
     </div>
     <div class="grid" id="hosts-grid"></div>
@@ -143,7 +156,17 @@ HTML_PANEL = r"""<!DOCTYPE html>
 </html>
 """
 
-class UpgradedMasterServer(BaseHTTPRequestHandler):
+class SecureMasterServer(BaseHTTPRequestHandler):
+    def check_auth(self):
+        # 验证请求头里的 Token
+        client_token = self.headers.get('X-Probe-Token')
+        if client_token != AUTH_TOKEN:
+            self.send_response(401)
+            self.end_headers()
+            self.wfile.write(b'{"error": "Unauthorized Token"}')
+            return False
+        return True
+
     def do_GET(self):
         if self.path == '/':
             self.send_response(200)
@@ -160,8 +183,12 @@ class UpgradedMasterServer(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        if not self.check_auth():
+            return
+            
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
+        
         if self.path == '/api/report':
             try:
                 data = json.loads(post_data.decode('utf-8'))
@@ -184,19 +211,27 @@ class UpgradedMasterServer(BaseHTTPRequestHandler):
     def log_message(self, format, *args): return
 
 if __name__ == '__main__':
-    HTTPServer(('0.0.0.0', 8000), UpgradedMasterServer).serve_forever()
-SERVER_BASE64
+    server = HTTPServer(('0.0.0.0', 8000), SecureMasterServer)
+    
+    # 开启 HTTPS 包装
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile='/usr/local/bin/probe_certs/server.crt', keyfile='/usr/local/bin/probe_certs/server.key')
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    
+    server.serve_forever()
+SERVER_CODE_EOF
 
     chmod +x /usr/local/bin/probe_server.py
 
-    # 写入 Systemd 服务
-    cat << 'EOF_SERVER_SERVICE' > /etc/systemd/system/probe-server.service
+    # 写入带有 Token 环境变量的 Systemd 服务
+    cat << EOF_SERVER_SERVICE > /etc/systemd/system/probe-server.service
 [Unit]
-Description=Probe Master Server
+Description=Probe Secure Master Server
 After=network.target
 
 [Service]
 Type=simple
+Environment="PROBE_TOKEN=${PROBE_TOKEN}"
 ExecStart=/usr/bin/env python3 /usr/local/bin/probe_server.py
 Restart=always
 
@@ -206,22 +241,30 @@ EOF_SERVER_SERVICE
 
     systemctl daemon-reload && systemctl enable --now probe-server.service
     echo "=========================================="
-    echo "✅ 主控端（Server）安装完成并已在后台运行！"
-    echo "🌐 请在浏览器访问: http://你的服务器IP:8000"
+    echo "✅ 安全主控端（Server）安装完成！"
+    echo "🔐 您设置的通讯 Token 为: ${PROBE_TOKEN}"
+    echo "🌐 请在浏览器通过 HTTPS 访问: https://你的服务器IP:8000"
+    echo "⚠️  注意：因为是自签名证书，浏览器首次访问会提示不安全，点击“高级”->“继续前往”即可。"
     echo "=========================================="
 
 elif [ "$CHOICE" == "2" ]; then
     read -p "请输入主控端（Server）的 IP 地址: " SERVER_IP
     read -p "请输入主控端端口 (默认 8000): " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-8000}
+    read -p "请输入主控端设置的通讯 Token: " CLIENT_TOKEN
 
-    echo "正在配置【被控端 Client】..."
+    echo "正在配置安全【被控端 Client】..."
 
     cat << 'CLIENT_CODE_EOF' > /usr/local/bin/probe_client.py
 #!/usr/bin/env python3
-import os, time, json, urllib.request
+import os, time, json, urllib.request, ssl
 
-SERVER_URL = "http://TARGET_SERVER_IP:TARGET_SERVER_PORT/api/report"
+# 改为 https 协议
+SERVER_URL = "https://TARGET_SERVER_IP:TARGET_SERVER_PORT/api/report"
+TOKEN = "TARGET_TOKEN"
+
+# 忽略自签名证书的验证验证（允许自签证书上报）
+ssl_context = ssl._create_unverified_context()
 
 def get_uptime_str():
     try:
@@ -279,20 +322,29 @@ def get_stats():
 if __name__ == "__main__":
     while True:
         try:
-            req = urllib.request.Request(SERVER_URL, data=json.dumps(get_stats()).encode('utf-8'), headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=2) as response: response.read()
-        except: pass
+            req = urllib.request.Request(
+                SERVER_URL, 
+                data=json.dumps(get_stats()).encode('utf-8'), 
+                headers={
+                    'Content-Type': 'application/json',
+                    'X-Probe-Token': TOKEN  # 携带 Token 上报
+                }
+            )
+            # 传入 ssl_context 允许连接自签名 HTTPS 
+            with urllib.request.urlopen(req, timeout=2, context=ssl_context) as response: response.read()
+        except Exception as e: pass
         time.sleep(2)
 CLIENT_CODE_EOF
 
     sed -i "s/TARGET_SERVER_IP/${SERVER_IP}/g" /usr/local/bin/probe_client.py
     sed -i "s/TARGET_SERVER_PORT/${SERVER_PORT}/g" /usr/local/bin/probe_client.py
+    sed -i "s/TARGET_TOKEN/${CLIENT_TOKEN}/g" /usr/local/bin/probe_client.py
     chmod +x /usr/local/bin/probe_client.py
 
     # 写入 Systemd 服务
     cat << 'EOF_CLIENT_SERVICE' > /etc/systemd/system/probe-client.service
 [Unit]
-Description=Probe Agent Client
+Description=Probe Safe Agent Client
 After=network.target
 
 [Service]
@@ -306,13 +358,10 @@ EOF_CLIENT_SERVICE
 
     systemctl daemon-reload && systemctl enable --now probe-client.service
     echo "=========================================="
-    echo "✅ 被控端（Client）安装完成并已成功上报数据！"
+    echo "✅ 被控端（Client）加密配置完成，开始安全上报！"
     echo "=========================================="
 
 else
     echo "❌ 输入错误，脚本退出。"
     exit 1
 fi
-EOF
-chmod +x install.sh
-./install.sh
