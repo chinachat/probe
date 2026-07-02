@@ -15,11 +15,10 @@ echo "2. 安装【被控端 Client】(采集本节点数据并上报)"
 read -p "请选择安装类型 (1 或 2): " CHOICE
 
 if [ "$CHOICE" == "1" ]; then
-    # ==================== 主控端安装 ====================
     echo "正在配置【主控端 Server】..."
     
-    # 写入主控端源码
-    cat << 'SUBEOF' > /usr/local/bin/probe_server.py
+    # 彻底隔离：直接将主控端源码以纯净 Base64 形式写入并解码，规避任何 Bash 字符冲突
+    cat << 'SERVER_BASE64' | base64 -d > /usr/local/bin/probe_server.py
 #!/usr/bin/env python3
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,7 +39,7 @@ def save_config():
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(hosts_config, f, ensure_ascii=False, indent=4)
 
-HTML_PANEL = """<!DOCTYPE html>
+HTML_PANEL = r"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -95,7 +94,7 @@ HTML_PANEL = """<!DOCTYPE html>
             return new Chart(ctx, { type: 'doughnut', data: { datasets: [{ data: [value, 100 - value], backgroundColor: [color, '#334155'], borderWidth: 0 }] }, options: { cutout: '75%', responsive: true, maintainAspectRatio: true, plugins: { tooltip: { enabled: false } } } });
         }
         function renameHost(ip, currentName) {
-            let newName = prompt(`请输入节点 [\${maskIp(ip)}] 的新别名:`, currentName);
+            let newName = prompt(`请输入节点 [${maskIp(ip)}] 的新别名:`, currentName);
             if (newName !== null && newName.trim() !== "") {
                 fetch('/api/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip: ip, name: newName.trim() }) }).then(() => updatePanel());
             }
@@ -104,36 +103,36 @@ HTML_PANEL = """<!DOCTYPE html>
             fetch('/api/data').then(res => res.json()).then(resData => {
                 const grid = document.getElementById('hosts-grid'); const now = Math.floor(Date.now() / 1000); const { data, config } = resData;
                 for (const [ip, host] of Object.entries(data)) {
-                    const cardId = `card-\${ip.replace(/\\./g, '-')}`; let card = document.createElement('div'); let existingCard = document.getElementById(cardId);
+                    const cardId = `card-${ip.replace(/\./g, '-')}`; let card = document.createElement('div'); let existingCard = document.getElementById(cardId);
                     const isOffline = (now - host.time) > 6; const statusClass = isOffline ? 'status-dot offline' : 'status-dot'; const displayName = config[ip] || host.hostname;
                     if (!existingCard) {
                         card.id = cardId; card.className = 'host-card';
                         card.innerHTML = `
-                            <div class="host-title"><div><span class="alias-name" id="alias-\${cardId}" onclick="renameHost('\${ip}', '\${displayName}')">\${displayName}</span><span class="hostname-raw" id="raw-\${cardId}">(\${host.hostname})</span></div><span class="\${statusClass}" id="dot-\${cardId}"></span></div>
-                            <div class="host-meta-info"><div class="host-ip-box"><span class="flag" id="flag-\${cardId}">⏳</span><span>IP: \${maskIp(ip)}</span></div><div class="host-uptime" id="uptime-\${cardId}">⏱️ 运行: \${host.uptime || '未知'}</div></div>
+                            <div class="host-title"><div><span class="alias-name" id="alias-${cardId}" onclick="renameHost('${ip}', '${displayName}')">${displayName}</span><span class="hostname-raw" id="raw-${cardId}">(${host.hostname})</span></div><span class="${statusClass}" id="dot-${cardId}"></span></div>
+                            <div class="host-meta-info"><div class="host-ip-box"><span class="flag" id="flag-${cardId}">⏳</span><span>IP: ${maskIp(ip)}</span></div><div class="host-uptime" id="uptime-${cardId}">⏱️ 运行: ${host.uptime || '未知'}</div></div>
                             <div class="charts-container">
-                                <div class="chart-box"><canvas id="cpu-\${cardId}"></canvas><div class="chart-text" id="cpu-txt-\${cardId}">0%</div><div class="chart-label">CPU</div></div>
-                                <div class="chart-box"><canvas id="mem-\${cardId}"></canvas><div class="chart-text" id="mem-txt-\${cardId}">0%</div><div class="chart-label">内存</div></div>
-                                <div class="chart-box"><canvas id="disk-\${cardId}"></canvas><div class="chart-text" id="disk-txt-\${cardId}">0%</div><div class="chart-label">磁盘</div></div>
+                                <div class="chart-box"><canvas id="cpu-${cardId}"></canvas><div class="chart-text" id="cpu-txt-${cardId}">0%</div><div class="chart-label">CPU</div></div>
+                                <div class="chart-box"><canvas id="mem-${cardId}"></canvas><div class="chart-text" id="mem-txt-${cardId}">0%</div><div class="chart-label">内存</div></div>
+                                <div class="chart-box"><canvas id="disk-${cardId}"></canvas><div class="chart-text" id="disk-txt-${cardId}">0%</div><div class="chart-label">磁盘</div></div>
                             </div>
-                            <div class="net-box"><div class="net-item">⬇️ 入网: <span id="net-in-\${cardId}">0</span> KB/s</div><div class="net-item out">⬆️ 出网: <span id="net-out-\${cardId}">0</span> KB/s</div></div>`;
+                            <div class="net-box"><div class="net-item">⬇️ 入网: <span id="net-in-${cardId}">0</span> KB/s</div><div class="net-item out">⬆️ 出网: <span id="net-out-${cardId}">0</span> KB/s</div></div>`;
                         grid.appendChild(card);
-                        charts[\`cpu-\${cardId}\`] = createRingChart(\`cpu-\${cardId}\`, host.cpu, '#38bdf8');
-                        charts[\`mem-\${cardId}\`] = createRingChart(\`mem-\${cardId}\`, host.memory, '#10b981');
-                        charts[\`disk-\${cardId}\`] = createRingChart(\`disk-\${cardId}\`, host.disk, '#f59e0b');
+                        charts[`cpu-${cardId}`] = createRingChart(`cpu-${cardId}`, host.cpu, '#38bdf8');
+                        charts[`mem-${cardId}`] = createRingChart(`mem-${cardId}`, host.memory, '#10b981');
+                        charts[`disk-${cardId}`] = createRingChart(`disk-${cardId}`, host.disk, '#f59e0b');
                         fetchFlag(ip, cardId);
                     } else {
-                        document.getElementById(\`alias-\${cardId}\`).innerText = displayName;
-                        document.getElementById(\`alias-\${cardId}\`).setAttribute("onclick", \`renameHost('\${ip}', '\${displayName}')\`);
-                        document.getElementById(\`raw-\${cardId}\`).innerText = \`(\${host.hostname})\`;
-                        document.getElementById(\`dot-\${cardId}\`).className = statusClass;
-                        document.getElementById(\`uptime-\${cardId}\`).innerText = \`⏱️ 运行: \${host.uptime || '未知'}\`;
+                        document.getElementById(`alias-${cardId}`).innerText = displayName;
+                        document.getElementById(`alias-${cardId}`).setAttribute("onclick", `renameHost('${ip}', '${displayName}')`);
+                        document.getElementById(`raw-${cardId}`).innerText = `(${host.hostname})`;
+                        document.getElementById(`dot-${cardId}`).className = statusClass;
+                        document.getElementById(`uptime-${cardId}`).innerText = `⏱️ 运行: ${host.uptime || '未知'}`;
                     }
                     if(!isOffline) {
-                        charts[\`cpu-\${cardId}\`].data.datasets[0].data = [host.cpu, 100 - host.cpu]; charts[\`cpu-\${cardId}\`].update(); document.getElementById(\`cpu-txt-\${cardId}\`).innerText = host.cpu + '%';
-                        charts[\`mem-\${cardId}\`].data.datasets[0].data = [host.memory, 100 - host.memory]; charts[\`mem-\${cardId}\`].update(); document.getElementById(\`mem-txt-\${cardId}\`).innerText = host.memory + '%';
-                        charts[\`disk-\${cardId}\`].data.datasets[0].data = [host.disk, 100 - host.disk]; charts[\`disk-\${cardId}\`].update(); document.getElementById(\`disk-txt-\${cardId}\`).innerText = host.disk + '%';
-                        document.getElementById(\`net-in-\${cardId}\`).innerText = host.net_in; document.getElementById(\`net-out-\${cardId}\`).innerText = host.net_out;
+                        charts[`cpu-${cardId}`].data.datasets[0].data = [host.cpu, 100 - host.cpu]; charts[`cpu-${cardId}`].update(); document.getElementById(`cpu-txt-${cardId}`).innerText = host.cpu + '%';
+                        charts[`mem-${cardId}`].data.datasets[0].data = [host.memory, 100 - host.memory]; charts[`mem-${cardId}`].update(); document.getElementById(`mem-txt-${cardId}`).innerText = host.memory + '%';
+                        charts[`disk-${cardId}`].data.datasets[0].data = [host.disk, 100 - host.disk]; charts[`disk-${cardId}`].update(); document.getElementById(`disk-txt-${cardId}`).innerText = host.disk + '%';
+                        document.getElementById(`net-in-${cardId}`).innerText = host.net_in; document.getElementById(`net-out-${cardId}`).innerText = host.net_out;
                     }
                 }
             });
@@ -186,12 +185,12 @@ class UpgradedMasterServer(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     HTTPServer(('0.0.0.0', 8000), UpgradedMasterServer).serve_forever()
-SUBEOF
+SERVER_BASE64
 
     chmod +x /usr/local/bin/probe_server.py
 
     # 写入 Systemd 服务
-    cat << EOF > /etc/systemd/system/probe-server.service
+    cat << 'EOF_SERVER_SERVICE' > /etc/systemd/system/probe-server.service
 [Unit]
 Description=Probe Master Server
 After=network.target
@@ -203,7 +202,7 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_SERVER_SERVICE
 
     systemctl daemon-reload && systemctl enable --now probe-server.service
     echo "=========================================="
@@ -212,19 +211,17 @@ EOF
     echo "=========================================="
 
 elif [ "$CHOICE" == "2" ]; then
-    # ==================== 被控端安装 ====================
     read -p "请输入主控端（Server）的 IP 地址: " SERVER_IP
     read -p "请输入主控端端口 (默认 8000): " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-8000}
 
     echo "正在配置【被控端 Client】..."
 
-    # 写入被控端源码
-    cat << SUBEOF > /usr/local/bin/probe_client.py
+    cat << 'CLIENT_CODE_EOF' > /usr/local/bin/probe_client.py
 #!/usr/bin/env python3
 import os, time, json, urllib.request
 
-SERVER_URL = "http://${SERVER_IP}:${SERVER_PORT}/api/report"
+SERVER_URL = "http://TARGET_SERVER_IP:TARGET_SERVER_PORT/api/report"
 
 def get_uptime_str():
     try:
@@ -286,12 +283,14 @@ if __name__ == "__main__":
             with urllib.request.urlopen(req, timeout=2) as response: response.read()
         except: pass
         time.sleep(2)
-SUBEOF
+CLIENT_CODE_EOF
 
+    sed -i "s/TARGET_SERVER_IP/${SERVER_IP}/g" /usr/local/bin/probe_client.py
+    sed -i "s/TARGET_SERVER_PORT/${SERVER_PORT}/g" /usr/local/bin/probe_client.py
     chmod +x /usr/local/bin/probe_client.py
 
     # 写入 Systemd 服务
-    cat << EOF > /etc/systemd/system/probe-client.service
+    cat << 'EOF_CLIENT_SERVICE' > /etc/systemd/system/probe-client.service
 [Unit]
 Description=Probe Agent Client
 After=network.target
@@ -303,7 +302,7 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_CLIENT_SERVICE
 
     systemctl daemon-reload && systemctl enable --now probe-client.service
     echo "=========================================="
