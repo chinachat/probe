@@ -13,5 +13,7 @@
 
 卸载主控：systemctl disable --now probe-server && rm -f /etc/systemd/system/probe-server.service
 
-卸载被控：systemctl disable --now probe-client && rm -f /etc/systemd/system/probe-client.service
-curl -sSO https://raw.githubusercontent.com/your-repo/linux-probe/main/install.sh && chmod +x install.sh && ./install.sh
+卸载被控：systemctl disable --now probe-client && rm -f /etc/systemd/system/probe-client.service  
+``
+curl -sSO https://raw.githubusercontent.com/chinachat/probe/refs/heads/main/install.sh && chmod +x install.sh && ./install.sh
+``
